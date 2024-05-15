@@ -64,6 +64,8 @@ class PPOConfig:
     """Name of project to use for tracking"""
     push_to_hub_if_best_kwargs: JSONDict = field(default_factory=dict)
     """Keyword arguments for pushing model to the hub during training (e.g. repo_id)"""
+    multiturn_mode: bool = False
+    """Enables multiturn mode in which LLM outputs are appended to state until terminal state is reached"""
 
     # hyperparameters
     steps: int = 20000

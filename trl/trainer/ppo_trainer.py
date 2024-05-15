@@ -366,6 +366,8 @@ class PPOTrainer(BaseTrainer):
 
         self.running = RunningMoments(self.accelerator)
 
+        self.terminal_states = None
+
     def _filter_kwargs(self, kwargs, target_func):
         """
         filter the keyword arguments that are supported by the target function.
@@ -494,15 +496,23 @@ class PPOTrainer(BaseTrainer):
                 generation_kwargs["max_new_tokens"] = length_sampler()
 
             with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
-                response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
+                if self.config.multiturn_mode:
+                    response = unwrapped_model.generate_until_terminal_state(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
+                else:
+                    response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
 
             if generate_ref_response:
                 with unwrap_model_for_generation(
                     ref_model, self.accelerator, is_peft_model=self.is_peft_model
                 ) as unwrapped_model:
-                    ref_response = unwrapped_model.generate(
+                    if self.config.multiturn_mode:
+                        ref_response = unwrapped_model.generate_until_terminal_state(
                         input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
-                    )
+                        )
+                    else:
+                        ref_response = unwrapped_model.generate(
+                            input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
+                        )
 
             if not return_prompt and not self.is_encoder_decoder:
                 response = response[:, query_tensor.shape[0] :]
@@ -553,7 +563,10 @@ class PPOTrainer(BaseTrainer):
             ).to(self.current_device)
 
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                generations = unwrapped_model.generate(**padded_inputs, **generation_kwargs)
+                if self.config.multiturn_mode:
+                    generations = unwrapped_model.generate_until_terminal_state(**padded_inputs, **generation_kwargs)
+                else:
+                    generations = unwrapped_model.generate(**padded_inputs, **generation_kwargs)
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
                 if not self.is_encoder_decoder:
@@ -869,6 +882,68 @@ class PPOTrainer(BaseTrainer):
 
         return stats
 
+
+    def init_multiturn_mode(self, terminal_states: List[str]):
+        ''' 
+        Initializes attributes needed for multiturn mode, such as tokenizing terminal states
+        '''
+        assert not self.terminal_states, "Multi-turn model has already been initialized. You are overwriting the previous set of terminal states."
+
+        # store a list of sequences of tokenized terminal states
+        # these are sequences because of the case where a terminal state is multiple tokens
+        # i.e.: <STOP> --tokenized--> ["<", "STOP", ">"]
+        
+        terminal_state_token_sequences = []
+        for state in terminal_states:
+            tokenized_state = self.tokenizer.encode(state)
+            terminal_state_token_sequences.append(tokenized_state)
+
+        self.terminal_states = terminal_state_token_sequences    
+        
+    def check_for_terminal_state(self, sequence: torch.tensor) -> bool:
+        '''
+        Returns True if the sequence contains a terminal state
+        False otherwise
+        '''
+
+        if self.terminal_states  == None:
+            raise ValueError("Make sure you run 'PPOTrainer.init_multiturn_mode()' first")
+        
+        if len(self.terminal_states) == 0: 
+            warnings.warn("You have not provided any terminal states, but you are calling check_for_terminal_state()")
+            return 0
+
+        for terminal_state in self.terminal_states:
+            # create sliding windows that are same size of target sequence
+            windows = terminal_state.unfold(0, sequence.size(0), 1)
+            for d in range(1, sequence.dim()):
+                windows = windows.unfold(d, sequence.size(d), 1)
+            windows = windows.contiguous().view(-1, *sequence.size())
+            for window in windows:
+                if window.equal(sequence):
+                    return True
+        return False
+    
+    def generate_until_terminal_state(self, input_ids:torch.Tensor, max_iter:int = 10):
+        '''
+        Continuously call generate from the model until a terminal state is reached or until num of max iterations has been reached
+        '''
+
+        assert self.terminal_states, "Only use 'generate_until_terminal_state()' after setting terminal states"
+        assert self.config.multiturn_mode, "Only use 'generate_until_terminal_state()' in multiturn mode"
+
+        iter = 0
+    
+        final_response = input_ids
+        
+        while iter < max_iter and not self.check_for_terminal_state(final_response):
+            response = self.model.generate(final_response)
+            final_response = final_response.append(response)
+            iter += 1
+        
+        return final_response
+
+  
     def _early_stop(self, policykl):
         r"""
         Handles the early stopping logic. If the policy KL is greater than the target KL, then the gradient is zeroed and
