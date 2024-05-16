@@ -1,7 +1,6 @@
 from trl.trainer.ppo_config import PPOConfig
 from trl.trainer.ppo_trainer import PPOTrainer
-################################
-
+### Custom implementations above this line ###
 
 from trl import AutoModelForCausalLMWithValueHead
 
@@ -19,7 +18,7 @@ def main():
     config = PPOConfig(
         model_name="lvwerra/gpt2-imdb",
         learning_rate=1.41e-5,
-        multiturn_mode = True)
+        multiturn_mode = True) # multiturn code change #1
     sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
 
     def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_max_text_length=8):
@@ -66,7 +65,7 @@ def main():
     tokenizer.pad_token = tokenizer.eos_token
 
     ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator)
-    ppo_trainer.init_multiturn_mode(terminal_states=["<STOP>"])
+    ppo_trainer.init_multiturn_mode(terminal_states=["<STOP>"]) # multiturn code change #2
 
     device = ppo_trainer.accelerator.device
     if ppo_trainer.accelerator.num_processes == 1:
