@@ -497,7 +497,7 @@ class PPOTrainer(BaseTrainer):
 
             with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
                 if self.config.multiturn_mode:
-                    response = unwrapped_model.generate_until_terminal_state(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
+                    response = self.generate_until_terminal_state(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
                 else:
                     response = unwrapped_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
 
@@ -506,7 +506,7 @@ class PPOTrainer(BaseTrainer):
                     ref_model, self.accelerator, is_peft_model=self.is_peft_model
                 ) as unwrapped_model:
                     if self.config.multiturn_mode:
-                        ref_response = unwrapped_model.generate_until_terminal_state(
+                        ref_response = self.generate_until_terminal_state(
                         input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
                         )
                     else:
@@ -564,7 +564,7 @@ class PPOTrainer(BaseTrainer):
 
             with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 if self.config.multiturn_mode:
-                    generations = unwrapped_model.generate_until_terminal_state(**padded_inputs, **generation_kwargs)
+                    generations = self.generate_until_terminal_state(**padded_inputs, **generation_kwargs)
                 else:
                     generations = unwrapped_model.generate(**padded_inputs, **generation_kwargs)
 
@@ -895,10 +895,10 @@ class PPOTrainer(BaseTrainer):
         
         terminal_state_token_sequences = []
         for state in terminal_states:
-            tokenized_state = self.tokenizer.encode(state)
+            tokenized_state = torch.Tensor(self.tokenizer.encode(state)).to(self.current_device)    
             terminal_state_token_sequences.append(tokenized_state)
 
-        self.terminal_states = terminal_state_token_sequences    
+        self.terminal_states = terminal_state_token_sequences
         
     def check_for_terminal_state(self, sequence: torch.tensor) -> bool:
         '''
@@ -912,19 +912,19 @@ class PPOTrainer(BaseTrainer):
         if len(self.terminal_states) == 0: 
             warnings.warn("You have not provided any terminal states, but you are calling check_for_terminal_state()")
             return 0
+        
+        sequence = sequence.reshape(-1)
 
         for terminal_state in self.terminal_states:
-            # create sliding windows that are same size of target sequence
-            windows = terminal_state.unfold(0, sequence.size(0), 1)
-            for d in range(1, sequence.dim()):
-                windows = windows.unfold(d, sequence.size(d), 1)
-            windows = windows.contiguous().view(-1, *sequence.size())
-            for window in windows:
-                if window.equal(sequence):
+            seq_length = sequence.size(0)
+            terminal_state_length = terminal_state.size(0)
+            # check for all windows if the terminal state exist
+            for start in range(seq_length - terminal_state_length  + 1):
+                if sequence[start:(start + seq_length)].equal(terminal_state):
                     return True
         return False
     
-    def generate_until_terminal_state(self, input_ids:torch.Tensor, max_iter:int = 10):
+    def generate_until_terminal_state(self, input_ids:torch.Tensor, max_iter:int = 10, **generation_kwargs):
         '''
         Continuously call generate from the model until a terminal state is reached or until num of max iterations has been reached
         '''
@@ -937,8 +937,8 @@ class PPOTrainer(BaseTrainer):
         final_response = input_ids
         
         while iter < max_iter and not self.check_for_terminal_state(final_response):
-            response = self.model.generate(final_response)
-            final_response = final_response.append(response)
+            response = self.model.generate(final_response, **generation_kwargs)
+            final_response = torch.cat((final_response, response), dim = 1)
             iter += 1
         
         return final_response
