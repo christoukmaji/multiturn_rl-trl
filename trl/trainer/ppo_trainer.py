@@ -936,7 +936,8 @@ class PPOTrainer(BaseTrainer):
     
         final_response = input_ids
         
-        while iter < max_iter and not self.check_for_terminal_state(final_response):
+        while iter < max_iter and not self.check_for_terminal_state(final_response) and final_response.size(1) <= self.model.config.n_positions:
+            print(final_response.shape)
             response = self.model.generate(final_response, **generation_kwargs)
             final_response = torch.cat((final_response, response), dim = 1)
             iter += 1
