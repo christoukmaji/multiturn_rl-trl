@@ -895,7 +895,7 @@ class PPOTrainer(BaseTrainer):
         
         terminal_state_token_sequences = []
         for state in terminal_states:
-            tokenized_state = torch.Tensor(self.tokenizer.encode(state)).to(self.current_device)    
+            tokenized_state = self.tokenizer.encode(state, return_tensors='pt').to(self.current_device)    
             terminal_state_token_sequences.append(tokenized_state)
 
         self.terminal_states = terminal_state_token_sequences
@@ -937,6 +937,14 @@ class PPOTrainer(BaseTrainer):
         final_response = input_ids
         
         while iter < max_iter and not self.check_for_terminal_state(final_response) and final_response.size(1) <= self.model.config.n_positions:
+            #print(final_response)
+            #print(self.tokenizer.eos_token_id, self.tokenizer.pad_token_id)
+            #if (torch.sum(final_response[:, -1] == self.tokenizer.pad_token_id) > 0 ):
+            #    print(final_response)
+            #    print(generation_kwargs)
+            #    assert False
+            
+            #print(self.tokenizer.decode(final_response.squeeze()))
             response = self.model.generate(final_response, **generation_kwargs)
             final_response = torch.cat((final_response, response), dim = 1)
             iter += 1
@@ -1146,6 +1154,10 @@ class PPOTrainer(BaseTrainer):
                 Dictionary of training statistics
         """
         self.model.train()
+        print("To see what goes into loss")
+        print(f"Old logprobs: {old_logprobs} \n Values: {values} \n Logits: {logits} \n \
+              Vpreds: {vpreds} \n logprobs: {logprobs} \n mask: {mask} \n \
+              advantages: {advantages} \n returns: {returns} \n ")
         loss_p, loss_v, train_stats = self.loss(
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
@@ -1241,6 +1253,110 @@ class PPOTrainer(BaseTrainer):
         advantages = masked_whiten(advantages, mask)
         advantages = advantages.detach()
         return values, advantages, returns
+
+    def custom_mask(self, input_tensor: torch.Tensor, words_to_start_ones: List[str], words_to_end_ones: List[str]) -> torch.Tensor:
+        '''
+        This function takes in 3 arguments.
+            input_tensor: a torch Tensor, usually some model output, or some system prompt
+            word_to_start_ones: a list of words which is later tokenized and, if detected,  starts the 1's of the mask
+            word_to_end_ones: a word which is later tokenized and, if detected, ends the 1's of the mask
+        
+        example:
+            input_tensor = torch.Tensor([12, 33, 46, 100, 101, 97, 22, 99])
+            words_to_start_ones = ["<action>", "<test>"]
+            words_to_end_ones   = ["</action>", </test>]
+    
+            custom_mask(input_tensor, word_to_start_ones, word_to_end_ones)
+                tokenizer.encode(words_to_start_ones) -> torch.Tensor([33, 46]), torch.Tensor([102, 103])
+                tokenizer.encode(words_to_end_ones)   -> torch.Tensor([97, 22]), torch.Tensor([104, 105])
+                # we only care about the tokens inclusive of these words
+                # since input_tensor = torch.Tensor([12, 33, 46, 100, 101, 97, 22, 99])
+                #        the output is torch.Tensor([ 0,  1,  1,   1,   1,  1,  1,  0])
+
+        '''
+        assert type(words_to_start_ones) == list, "'words_to_start_ones' must be a list"
+        assert type(words_to_end_ones) == list, "'words_to_end_ones' must be a list"
+
+
+        # tokenize start words
+        start_token_sequences = []
+        for word in words_to_start_ones:
+            tokenized_state = self.tokenizer.encode(word, return_tensors='pt').to(self.current_device)    
+            start_token_sequences.append(tokenized_state[0, 1:]) # clear the bos token
+
+        # tokenize end words
+        end_token_sequences = []
+        for word in words_to_end_ones:
+            tokenized_state = self.tokenizer.encode(word, return_tensors='pt').to(self.current_device)    
+            end_token_sequences.append(tokenized_state[0, 1:]) # clear the bos token
+
+        # initialize an attention mask the same size as the input tensor
+        mask = torch.zeros(input_tensor.shape)
+
+        # similar search mechanism as check_for_terminal_state()
+        input_tensor = input_tensor.reshape(-1)
+
+        # efficiency idea:
+            # create a mask. for each of the start sequences, search through tensor. if detected, set respective values to 1
+            # then for each of end sequences, search through tensor. if detected, set respective values to -1
+            # iterate final time, set everything to ones inbetween 1 and -1 inclusive, and 1 to end inclusive.
+            
+        # TODO: if needed, once we find start sequence, we can just skip to next token not part of sequence
+        # i.e. if tensor is [1,2,3,4,5, 6], and we detect [1,2,3], no need to detect [2,3,4], just skip to [4,5,6].
+
+        #for each of the start sequences, search through tensor. if detected, set respective values to 1
+        for start_token in start_token_sequences:
+            seq_length = input_tensor.size(0)
+            start_token_length = start_token.size(0)
+            for i in range(seq_length - start_token_length  + 1):
+                #print(f"start token: {start_token}")
+                #print(f"tensor seq: {input_tensor[i:(i + start_token_length)]}")
+                if input_tensor[i:(i + start_token_length)].equal(start_token):
+                    mask[0, i:(i + start_token_length)] = torch.ones(start_token_length)
+        
+        # then for each of end sequences, search through tensor. if detected, set respective values to -1
+        for end_token in end_token_sequences:
+            seq_length = input_tensor.size(0)
+            end_token_length = end_token.size(0)
+            for i in range(seq_length - end_token_length  + 1):
+                if input_tensor[i:(i + end_token_length)].equal(end_token):
+                    mask[0, i:(i + end_token_length)] = -torch.ones(end_token_length)
+        
+
+        # iterate final time, set everything to ones inbetween 1 and -1 inclusive, and 1 to end inclusive.
+        mask_clone = mask.clone()  # Clone the mask to avoid in-place modifications
+        
+        # identify indices of -1 and 1
+        neg_one_indices = (mask_clone == -1).nonzero(as_tuple=True)[1]
+        pos_one_indices = (mask_clone == 1).nonzero(as_tuple=True)[1]
+
+        # check if we have any leading -1's before 1s - edge case
+        if neg_one_indices[0] < pos_one_indices[0]:
+            # replace first contiguous sequence of -1s and set them to 1s
+            count_first_increasing_sequence = lambda tensor: sum(tensor[i] - tensor[i - 1] == 1 for i in range(1, tensor.size(0))) + 1 if tensor.size(0) > 1 else 0
+            number_increasing_ones = count_first_increasing_sequence(neg_one_indices)
+            mask_clone[0, :number_increasing_ones] = 1
+
+        # check if the end has unclosed 1's, and set right elements of that to 1 - edge case
+        if len(pos_one_indices) > 0 and (len(neg_one_indices) == 0 or pos_one_indices[-1] > neg_one_indices[-1]):
+            mask_clone[0, pos_one_indices[-1]:] = 1
+
+        # set all elements between -1 and 1 to 1, inclusive
+        start_index, end_index = None, None
+        for i in range(mask_clone.size(1)):
+            if mask_clone[0, i] == 1:
+                start_index = i
+            elif mask_clone[0, i] == -1:
+                end_index = i
+            elif mask_clone[0, i] == 0 and start_index and end_index:
+                mask_clone[0, start_index:end_index + 1] = torch.ones(end_index - start_index + 1)
+                start_index, end_index = None, None
+        
+        if mask_clone.shape != input_tensor.shape:
+            raise ValueError("Masked input tensor has had its size incorrectly altered.")
+
+        return mask_clone
+    
 
     def loss(
         self,

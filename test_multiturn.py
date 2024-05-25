@@ -16,7 +16,7 @@ from trl.core import LengthSampler
 
 def main():
     config = PPOConfig(
-        model_name="lvwerra/gpt2-imdb",
+        model_name="JackFram/llama-160m",
         learning_rate=1.41e-5,
         multiturn_mode = True) # multiturn code change #1
     sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
@@ -60,7 +60,8 @@ def main():
     
     model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
     ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
-    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(config.model_name, padding_side = 'left')
+
 
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -83,8 +84,16 @@ def main():
         "top_p": 1.0,
         "do_sample": True,
         "pad_token_id": tokenizer.eos_token_id,
-        "max_length": 100
+        #"max_length": 100
     }
+
+    #### test loss mask 
+    test_sequence = "end here this is a test start here and hi hi magikarp end here hello test start here hello hello"
+    encoded_test_sequence = tokenizer.encode(test_sequence, return_tensors='pt').to(device)
+    result = ppo_trainer.custom_mask(encoded_test_sequence, ["start here"], ["end here"])
+
+    assert False
+    ####
 
     for batch in tqdm(ppo_trainer.dataloader):
         query_tensors = batch["input_ids"]
@@ -93,6 +102,7 @@ def main():
         for query in query_tensors:
             gen_len = output_length_sampler()
             generation_kwargs["max_new_tokens"] = gen_len
+            print(query)
             response = ppo_trainer.generate(query, **generation_kwargs)
             response_tensors.append(response.squeeze()[-gen_len:])
         batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
