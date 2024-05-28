@@ -6,10 +6,11 @@ on:
 
 jobs:
   unit_tests:
-    - name: Checkout
-      uses: actions/checkout@v4
-    - name: Install pytest
-      run: pip install pytest
-    - name: Unit test
-      run: pytest test_custom_trl.py
-    
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install pytest
+        run: pip install pytest
+      - name: Unit test
+        run: pytest test_custom_trl.py
