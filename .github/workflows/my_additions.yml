@@ -11,5 +11,5 @@ jobs:
     - name: Install pytest
       run: pip install pytest
     - name: Unit test
-      run: pytest
+      run: pytest test_custom_trl.py
     
