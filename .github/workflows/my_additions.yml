@@ -2,7 +2,7 @@ name: custom-additions-checks
 on:
   push:
     branches:
-      - main
+      - develop
 
 jobs:
   unit_tests:
