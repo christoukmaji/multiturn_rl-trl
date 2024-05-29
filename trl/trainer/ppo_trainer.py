@@ -1331,11 +1331,11 @@ class PPOTrainer(BaseTrainer):
         pos_one_indices = (mask_clone == 1).nonzero(as_tuple=True)[1]
 
         # check if we have any leading -1's before 1s - edge case
-        if neg_one_indices[0] < pos_one_indices[0]:
+        #if neg_one_indices[0] < pos_one_indices[0]:
             # replace first contiguous sequence of -1s and set them to 1s
-            count_first_increasing_sequence = lambda tensor: sum(tensor[i] - tensor[i - 1] == 1 for i in range(1, tensor.size(0))) + 1 if tensor.size(0) > 1 else 0
-            number_increasing_ones = count_first_increasing_sequence(neg_one_indices)
-            mask_clone[0, :number_increasing_ones] = 1
+        #    count_first_increasing_sequence = lambda tensor: sum(tensor[i] - tensor[i - 1] == 1 for i in range(1, tensor.size(0))) + 1 if tensor.size(0) > 1 else 0
+        #    number_increasing_ones = count_first_increasing_sequence(neg_one_indices)
+        #    mask_clone[0, :number_increasing_ones] = 1
 
         # check if the end has unclosed 1's, and set right elements of that to 1 - edge case
         if len(pos_one_indices) > 0 and (len(neg_one_indices) == 0 or pos_one_indices[-1] > neg_one_indices[-1]):
@@ -1352,8 +1352,15 @@ class PPOTrainer(BaseTrainer):
                 mask_clone[0, start_index:end_index + 1] = torch.ones(end_index - start_index + 1)
                 start_index, end_index = None, None
         
+        # check for out of bounds (what if last tokens are end state)
+        if mask_clone[0, -1] == -1 and start_index and end_index:
+            mask_clone[0, start_index:end_index + 1] = torch.ones(end_index - start_index + 1)
+            start_index, end_index = None, None
+        
+        
+        mask_clone = mask_clone.reshape(-1)
         if mask_clone.shape != input_tensor.shape:
-            raise ValueError("Masked input tensor has had its size incorrectly altered.")
+            raise ValueError(f"Masked input tensor has had its size incorrectly altered. Mask is of shape {mask_clone.shape} but input tensor is of shape {input_tensor.shape}")
 
         return mask_clone
     
