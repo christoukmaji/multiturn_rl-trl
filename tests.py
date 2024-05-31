@@ -82,13 +82,13 @@ def test_loss_mask(test_suit:TestSuite):
     test_sequence = "nlp is cool start here and hi hi end here nlp is the best"
     encoded_test_sequence = test_suit.tokenizer.encode(test_sequence, return_tensors='pt').to(test_suit.device)
     result = test_suit.ppo_trainer.custom_mask(encoded_test_sequence, ["start here"], ["end here"])
-    found_index_of_start_state = None
+    found_index_of_end_state = None
 
-    encoded_end_state = test_suit.tokenizer.encode("start here", return_tensors='pt').to(test_suit.device)[:,1:] # so we dnt get start token
+    encoded_end_state = test_suit.tokenizer.encode("end here", return_tensors='pt').to(test_suit.device)[:,1:] # so we dnt get start token
     for i in range(encoded_test_sequence.size(1) - encoded_end_state.size(1) + 1):
         if torch.equal(encoded_test_sequence[:, i:i + encoded_end_state.size(1)], encoded_end_state):
-            found_index_of_start_state = i
-    assert found_index_of_start_state, f"❌ Failed Loss Mask Test: #2: The end state was not correctly encoded by the tokenizer"
+            found_index_of_end_state = i
+    assert found_index_of_end_state, f"❌ Failed Loss Mask Test: #2: The end state was not correctly encoded by the tokenizer"
     logger.info("✅ Passed Loss Mask Test: #2")
 
 
@@ -117,10 +117,30 @@ def test_loss_mask(test_suit:TestSuite):
     result = test_suit.ppo_trainer.custom_mask(encoded_test_sequence, ["start here"], ["end here"])
 
     # find start state index
-    encoded_start_state = test_suit.tokenizer.encode("start here", return_tensors='pt').to(test_suit.device)
+    found_index_of_start_state = None
+    encoded_start_state = test_suit.tokenizer.encode("start here", return_tensors='pt').to(test_suit.device)[:,1:] # so we dnt get start token
+    for i in range(encoded_test_sequence.size(1) - encoded_start_state.size(1) + 1):
+        if torch.equal(encoded_test_sequence[:, i:i + encoded_start_state.size(1)], encoded_start_state):
+            found_index_of_start_state = i
+    
+    # find end state index 
+    # slight change from other end state test bc here we want the final index of end state
+    found_index_of_end_state = None
+    encoded_end_state = test_suit.tokenizer.encode("end here", return_tensors='pt').to(test_suit.device)[:,1:] # so we dnt get start token
+    for i in range(encoded_test_sequence.size(1) - encoded_end_state.size(1) + 1):
+        if torch.equal(encoded_test_sequence[:, i:i + encoded_end_state.size(1)], encoded_end_state):
+            found_index_of_end_state = i + encoded_end_state.size(1)
+    
+    emulate_output = torch.zeros(encoded_test_sequence.shape)
+    emulate_output[0, found_index_of_start_state:found_index_of_end_state] = torch.ones(found_index_of_end_state - found_index_of_start_state)
+    #print(emulate_output, result)
+    #print(encoded_test_sequence)
+    #print(encoded_start_state)
+    #print(encoded_end_state)
+    emulate_output = emulate_output.reshape(-1)
 
-    assert result.sum() == 0, f"❌ Failed Loss Mask Test: #5: You are not masking the correct tokens"
-    logger.info("✅ Passed Loss Mask Test: #5")
+    assert torch.equal(emulate_output, result), f"❌ Failed Loss Mask Test: #5: You are not masking the correct tokens"
+    logger.info("✅ Passed Loss Mask Test: #5 - Case where both start and end states are in the middle of the sequence")
 
 
 if __name__ == "__main__":
