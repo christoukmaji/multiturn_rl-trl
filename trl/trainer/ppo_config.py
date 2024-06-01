@@ -92,12 +92,12 @@ class PPOConfig:
     """Range for clipping values in loss calculation"""
     vf_coef: float = 0.1
     """Scaling factor for value loss"""
-    batch_size: int = 128
+    batch_size: int = 1 # changed from 128 to 1
     """Number of samples per optimisation step"""
     forward_batch_size: Optional[int] = None
     """DEPRECATED: use `mini_batch_size` instead, which does the same thing."""
-    mini_batch_size: int = 128
-    """Number of samples optimized in each mini batch"""
+    mini_batch_size: int = 1
+    """Number of samples optimized in each mini batch""" # changed from 128 to 1
     gradient_accumulation_steps: int = 1
     """The number of gradient accumulation steps"""
     world_size: tyro.conf.Suppress[int] = None

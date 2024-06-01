@@ -102,12 +102,12 @@ def test_loss_mask(test_suit:TestSuite):
     logger.info("✅ Passed Loss Mask Test: #3")
 
 
-    # Test 4: check that the entire mask is zeros
-    test_sequence = "end here and hi hi start here"
+    # Test 4: check that the entire mask is zeros until the start state
+    test_sequence = "end here and hi hi"
     encoded_test_sequence = test_suit.tokenizer.encode(test_sequence, return_tensors='pt').to(test_suit.device)
     result = test_suit.ppo_trainer.custom_mask(encoded_test_sequence, ["start here"], ["end here"])
 
-    assert result.sum() == 0, f"❌ Failed Loss Mask Test: #4: Tensor is {result} but should have been all 0's"
+    assert torch.equal(result, torch.zeros(result.shape)), f"❌ Failed Loss Mask Test: #4: Tensor is {result} but should have been all 0's"
     logger.info("✅ Passed Loss Mask Test: #4")
 
 
@@ -141,6 +141,28 @@ def test_loss_mask(test_suit:TestSuite):
 
     assert torch.equal(emulate_output, result), f"❌ Failed Loss Mask Test: #5: You are not masking the correct tokens"
     logger.info("✅ Passed Loss Mask Test: #5 - Case where both start and end states are in the middle of the sequence")
+
+
+
+    # Test 6:
+    # Start state followed by another start state
+    test_sequence = "start here nlp is cool start here and hi hi nlp is the best"
+    encoded_test_sequence = test_suit.tokenizer.encode(test_sequence, return_tensors='pt').to(test_suit.device)
+    result = test_suit.ppo_trainer.custom_mask(encoded_test_sequence, ["start here"], ["end here"])
+
+    assert result.size(dim=0) - 1 == result.sum(), f"❌ Failed Loss Mask Test: #6: Tensor is {result} but should have been all 1's" # with exception of start token
+    logger.info("✅ Passed Loss Mask Test: #6 - Case with two consecutive start states")
+
+
+
+    # Test 6:
+    # End state followed by another end state
+    test_sequence = "here nlp is cool end here and hi hi nlp is end here the best"
+    encoded_test_sequence = test_suit.tokenizer.encode(test_sequence, return_tensors='pt').to(test_suit.device)
+    result = test_suit.ppo_trainer.custom_mask(encoded_test_sequence, ["start here"], ["end here"])
+
+    assert torch.equal(result, torch.zeros(result.shape)), f"❌ Failed Loss Mask Test: #7: Tensor is {result} but should have been all 0's" # with exception of start token
+    logger.info("✅ Passed Loss Mask Test: #7 - Case with two consecutive end states")
 
 
 if __name__ == "__main__":

@@ -936,7 +936,9 @@ class PPOTrainer(BaseTrainer):
     
         final_response = input_ids
         
-        while iter < max_iter and not self.check_for_terminal_state(final_response) and final_response.size(1) <= self.model.config.n_positions:
+        while iter < max_iter and not self.check_for_terminal_state(final_response):
+            #and final_response.size(1) <= self.model.config.n_positions: # removing check for context window size
+            
             #print(final_response)
             #print(self.tokenizer.eos_token_id, self.tokenizer.pad_token_id)
             #if (torch.sum(final_response[:, -1] == self.tokenizer.pad_token_id) > 0 ):
@@ -948,6 +950,7 @@ class PPOTrainer(BaseTrainer):
             response = self.model.generate(final_response, **generation_kwargs)
             final_response = torch.cat((final_response, response), dim = 1)
             iter += 1
+            # print(response)
         
         return final_response
 
@@ -1154,10 +1157,10 @@ class PPOTrainer(BaseTrainer):
                 Dictionary of training statistics
         """
         self.model.train()
-        print("To see what goes into loss")
-        print(f"Old logprobs: {old_logprobs} \n Values: {values} \n Logits: {logits} \n \
-              Vpreds: {vpreds} \n logprobs: {logprobs} \n mask: {mask} \n \
-              advantages: {advantages} \n returns: {returns} \n ")
+        #print("To see what goes into loss")
+        #print(f"Old logprobs: {old_logprobs} \n Values: {values} \n Logits: {logits} \n \
+        #      Vpreds: {vpreds} \n logprobs: {logprobs} \n mask: {mask} \n \
+        #      advantages: {advantages} \n returns: {returns} \n ")
         loss_p, loss_v, train_stats = self.loss(
             old_logprobs, values, logits, vpreds, logprobs, mask, advantages, returns
         )
@@ -1254,6 +1257,10 @@ class PPOTrainer(BaseTrainer):
         advantages = advantages.detach()
         return values, advantages, returns
 
+    def batched_custom_mask(self, input_batch: List[torch.Tensor], words_to_start_ones: List[str], words_to_end_ones: List[str]) -> List[torch.Tensor]:
+        if not type(input_batch) == list: raise ValueError(f"batched_custom_mask expects 'input_batch' to be List[torch.Tensor] but currently it's {type(input_batch)}")
+        return [self.custom_mask(i.reshape(1,-1), words_to_start_ones, words_to_end_ones) for i in input_batch]
+
     def custom_mask(self, input_tensor: torch.Tensor, words_to_start_ones: List[str], words_to_end_ones: List[str]) -> torch.Tensor:
         '''
         This function takes in 3 arguments.
@@ -1274,6 +1281,7 @@ class PPOTrainer(BaseTrainer):
                 #        the output is torch.Tensor([ 0,  1,  1,   1,   1,  1,  1,  0])
 
         '''
+        assert input_tensor.shape == input_tensor.reshape(1,-1).shape, f"input tensor must be of shape {input_tensor.reshape(1,-1).shape} but it is currently {input_tensor.shape}"
         assert type(words_to_start_ones) == list, "'words_to_start_ones' must be a list"
         assert type(words_to_end_ones) == list, "'words_to_end_ones' must be a list"
 
@@ -1332,14 +1340,40 @@ class PPOTrainer(BaseTrainer):
 
         # check if we have any leading -1's before 1s - edge case
         #if neg_one_indices[0] < pos_one_indices[0]:
-            # replace first contiguous sequence of -1s and set them to 1s
+            # replace first contiguous sequence of -1s and set them to 0s - dont care about it unless sequence of tokens has been intiaitaed by a start state
         #    count_first_increasing_sequence = lambda tensor: sum(tensor[i] - tensor[i - 1] == 1 for i in range(1, tensor.size(0))) + 1 if tensor.size(0) > 1 else 0
-        #    number_increasing_ones = count_first_increasing_sequence(neg_one_indices)
-        #    mask_clone[0, :number_increasing_ones] = 1
+        #    copy_of_neg_one_indices = neg_one_indices.clone()
+        #    while copy_of_neg_one_indices.numel() and copy_of_neg_one_indices[0] < pos_one_indices[0]:
+        #        number_increasing_ones = count_first_increasing_sequence(neg_one_indices)
+        #        mask_clone[0, :number_increasing_ones+1] = 0
+        #        copy_of_neg_one_indices = copy_of_neg_one_indices[1:]
+
+
+        copy_of_neg_one_indices = neg_one_indices.clone()
+        if len(neg_one_indices) > 0 and (len(pos_one_indices) == 0 or neg_one_indices[0] < pos_one_indices[0]):
+            if len(pos_one_indices) == 0: # special case because what if no positive indices then we have outofbounds
+                while copy_of_neg_one_indices.numel(): 
+                    mask_clone[0, :copy_of_neg_one_indices[0]+1] = 0
+                    copy_of_neg_one_indices = copy_of_neg_one_indices[1:]
+            else:
+                while copy_of_neg_one_indices.numel() and copy_of_neg_one_indices[0] < pos_one_indices[0]: 
+                    mask_clone[0, :copy_of_neg_one_indices[0]+1] = 0
+                    copy_of_neg_one_indices = copy_of_neg_one_indices[1:]
+
 
         # check if the end has unclosed 1's, and set right elements of that to 1 - edge case
+        # reason for while loop if what if we have multiple 1's
+        # i.e.: [1, 0, 0, -1, 1, 0, 0, 1, 0]
+        copy_of_pos_one_indices = pos_one_indices.clone()
         if len(pos_one_indices) > 0 and (len(neg_one_indices) == 0 or pos_one_indices[-1] > neg_one_indices[-1]):
-            mask_clone[0, pos_one_indices[-1]:] = 1
+            if len(neg_one_indices) == 0: # special case because what if no negative indices then we have outofbounds
+                while copy_of_pos_one_indices.numel(): # while there are unclosed 1's
+                    mask_clone[0, copy_of_pos_one_indices[-1]:] = 1
+                    copy_of_pos_one_indices = copy_of_pos_one_indices[:-1]
+            else:
+                while copy_of_pos_one_indices.numel() and (copy_of_pos_one_indices[-1] > neg_one_indices[-1]): # while there are unclosed 1's
+                    mask_clone[0, copy_of_pos_one_indices[-1]:] = 1
+                    copy_of_pos_one_indices = copy_of_pos_one_indices[:-1]
 
         # set all elements between -1 and 1 to 1, inclusive
         start_index, end_index = None, None

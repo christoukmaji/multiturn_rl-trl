@@ -19,7 +19,7 @@ def main():
         model_name="JackFram/llama-160m",
         learning_rate=1.41e-5,
         multiturn_mode = True) # multiturn code change #1
-    sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
+    sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 1} #changed batch size from 16 to 1, nvm this doesnt do anything lol
 
     def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_max_text_length=8):
         """
@@ -44,7 +44,7 @@ def main():
         input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
         def tokenize(sample):
-            sample["input_ids"] = tokenizer.encode(sample["review"])[: input_size()]
+            sample["input_ids"] = tokenizer.encode('the' + sample["review"])[: input_size()]
             sample["query"] = tokenizer.decode(sample["input_ids"])
             return sample
 
@@ -88,21 +88,22 @@ def main():
     }
 
     #### test loss mask 
-    test_sequence = "end here this is a test start here and hi hi magikarp end here hello test start here hello hello"
-    encoded_test_sequence = tokenizer.encode(test_sequence, return_tensors='pt').to(device)
-    result = ppo_trainer.custom_mask(encoded_test_sequence, ["start here"], ["end here"])
+    #test_sequence = "end here this is a test start here and hi hi magikarp end here hello test start here hello hello"
+    #encoded_test_sequence = tokenizer.encode(test_sequence, return_tensors='pt').to(device)
+    #result = ppo_trainer.custom_mask(encoded_test_sequence, ["start here"], ["end here"])
 
-    assert False
+    #assert False
     ####
 
     for batch in tqdm(ppo_trainer.dataloader):
-        query_tensors = batch["input_ids"]
+        query_tensors = batch["input_ids"] # size is 128
+        print(len(query_tensors))
 
         response_tensors = []
         for query in query_tensors:
             gen_len = output_length_sampler()
             generation_kwargs["max_new_tokens"] = gen_len
-            print(query)
+            #print(query)
             response = ppo_trainer.generate(query, **generation_kwargs)
             response_tensors.append(response.squeeze()[-gen_len:])
         batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
@@ -114,6 +115,11 @@ def main():
         rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
 
          #### Run PPO step
+        print(response_tensors)
+        print(tokenizer.decode(response_tensors[0]))
+        masked = ppo_trainer.batched_custom_mask(response_tensors, ['the'], ['end'])
+        print(masked)
+
         stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
         ppo_trainer.log_stats(stats, batch, rewards)
     
